@@ -1,12 +1,35 @@
 import disnake
 from disnake.ext import commands
 
+from support_ai.llm import SupportAIError, ask_support
+
 
 GUILD_ID = 1572541450489430036
 CATEGORY_ID = 1574470842287530004
 TICKET_CHANNEL_ID = 1574471878259769344
 CREATE_TICKET_CUSTOM_ID = "atlasbot:create-ticket"
 OPEN_TICKET_CUSTOM_ID = "atlasbot:close-ticket"
+AI_ASSISTANT_CUSTOM_ID = "atlasbot:choose-ai"
+ADMIN_ASSISTANT_CUSTOM_ID = "atlasbot:choose-admin"
+HUMAN_ROLE_ID = 1574481575054278717
+
+
+def ticket_topic(owner_id: int, mode: str = "choice") -> str:
+    return f"atlasbot-ticket:{owner_id}:mode:{mode}"
+
+
+def parse_ticket_topic(topic: str | None) -> tuple[int | None, str]:
+    if not topic or not topic.startswith("atlasbot-ticket:"):
+        return None, "none"
+    try:
+        parts = topic.split(":")
+        owner_id = int(parts[1])
+        mode = "choice"
+        if len(parts) >= 4 and parts[2] == "mode":
+            mode = parts[3]
+        return owner_id, mode
+    except (IndexError, ValueError):
+        return None, "none"
 
 
 class TicketModal(disnake.ui.Modal):
@@ -59,7 +82,7 @@ class TicketModal(disnake.ui.Modal):
                 channel
                 for channel in category.text_channels
                 if isinstance(channel, disnake.TextChannel)
-                and channel.topic == f"atlasbot-ticket:{inter.author.id}"
+                and parse_ticket_topic(channel.topic)[0] == inter.author.id
             ),
             None,
         )
@@ -92,7 +115,7 @@ class TicketModal(disnake.ui.Modal):
             ticket_channel = await guild.create_text_channel(
                 name=f"ticket-{inter.author.id}",
                 category=category,
-                topic=f"atlasbot-ticket:{inter.author.id}",
+                    topic=ticket_topic(inter.author.id, "choice"),
                 overwrites=overwrites,
                 reason=f"Тікет підтримки для {inter.author}",
             )
@@ -118,20 +141,20 @@ class TicketModal(disnake.ui.Modal):
             inline=True,
         )
         greeting_embed = disnake.Embed(
-            title="Тікет підтримки відкрито",
+            title="Тікет техпідтримки відкрито",
             description=(
-                f"{inter.author.mention}, опишіть свою проблему якомога детальніше. "
-                "Адміністрація побачить цей канал і відповість вам тут."
+                f"{inter.author.mention}, як вам краще продовжити звернення?"
             ),
             colour=disnake.Colour.green(),
         )
+        greeting_embed.set_footer(text="AtlasBot • Оберіть спосіб підтримки")
         await ticket_channel.send(
             content=f"{inter.author.mention}",
             embed=embed,
         )
         await ticket_channel.send(
             embed=greeting_embed,
-            view=CloseTicketView(),
+            view=SupportChoiceView(),
         )
         await inter.edit_original_response(
             content=f"Тікет створено: {ticket_channel.mention}"
@@ -175,6 +198,56 @@ class CloseTicketView(disnake.ui.View):
         )
 
 
+class SupportChoiceView(disnake.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            disnake.ui.Button(
+                label="Спілкуватись з ШІ-асистентом",
+                style=disnake.ButtonStyle.primary,
+                emoji="🤖",
+                custom_id=AI_ASSISTANT_CUSTOM_ID,
+            )
+        )
+        self.add_item(
+            disnake.ui.Button(
+                label="Почекати адміністратора",
+                style=disnake.ButtonStyle.secondary,
+                emoji="👤",
+                custom_id=ADMIN_ASSISTANT_CUSTOM_ID,
+            )
+        )
+        self.add_item(
+            disnake.ui.Button(
+                label="Закрити тікет",
+                style=disnake.ButtonStyle.danger,
+                emoji="🔒",
+                custom_id=OPEN_TICKET_CUSTOM_ID,
+            )
+        )
+
+
+class AIResponseView(disnake.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            disnake.ui.Button(
+                label="Почекати адміністратора",
+                style=disnake.ButtonStyle.secondary,
+                emoji="👤",
+                custom_id=ADMIN_ASSISTANT_CUSTOM_ID,
+            )
+        )
+        self.add_item(
+            disnake.ui.Button(
+                label="Закрити тікет",
+                style=disnake.ButtonStyle.danger,
+                emoji="🔒",
+                custom_id=OPEN_TICKET_CUSTOM_ID,
+            )
+        )
+
+
 class Support(commands.Cog):
     def __init__(self, bot: commands.InteractionBot) -> None:
         self.bot = bot
@@ -183,38 +256,39 @@ class Support(commands.Cog):
     async def cog_load(self) -> None:
         self.bot.add_view(CreateTicketView())
         self.bot.add_view(CloseTicketView())
+        self.bot.add_view(SupportChoiceView())
+        self.bot.add_view(AIResponseView())
 
     def ticket_panel_embed(self) -> disnake.Embed:
         embed = disnake.Embed(
-            title="Вітаємо в каналі підтримки!",
-            description="Потрібна допомога?",
-            colour=disnake.Colour.dark_grey(),
+            title="Техпідтримка Minecraft-сервера Atlas",
+            description="Зустріли проблему на сервері або у грі?",
+            colour=disnake.Colour.dark_green(),
         )
         embed.add_field(
-            name="Знайшли баг?",
-            value="Повідомте нам про несправність у роботі сервера.",
+            name="Проблема з сервером",
+            value="Розкажіть про помилку при вході, лаги або відключення.",
             inline=False,
         )
         embed.add_field(
-            name="Виявили порушення правил?",
-            value="Зверніть нашу увагу на порушення, щоб ми могли оперативно вжити заходів.",
+            name="Скарга або порушення",
+            value="Опишіть обставини та прикріпіть відео, скриншоти або інші докази.",
             inline=False,
         )
         embed.add_field(
-            name="Є ідея для покращення сервера?",
-            value="Поділіться своїми думками та пропозиціями.",
+            name="Пропозиція для проекту",
+            value="Поділіться ідеєю покращення серверів або ігрового процесу.",
             inline=False,
         )
         embed.add_field(
-            name="",
+            name="Як створити тікет",
             value=(
                 "Щоб створити тікет, натисніть кнопку «Створити тікет». "
-                "Після цього відкриється спеціальний канал, де ви можете залишити "
-                "своє повідомлення — скаргу, ідею, опис бага або запитання."
+                "Потім оберіть ШІ-асистента або очікування адміністратора."
             ),
             inline=False,
         )
-        embed.set_footer(text="AtlasBot • Техпідтримка")
+        embed.set_footer(text="Atlas • Техпідтримка Minecraft-сервера")
         return embed
 
     async def ensure_ticket_panel(self) -> None:
@@ -243,6 +317,172 @@ class Support(commands.Cog):
             view=CreateTicketView(),
         )
 
+    @commands.Cog.listener()
+    async def on_message(self, message: disnake.Message) -> None:
+        if message.author.bot:
+            return
+        if not isinstance(message.channel, disnake.TextChannel):
+            return
+        owner_id, mode = parse_ticket_topic(message.channel.topic)
+        if owner_id is None:
+            return
+        if mode != "ai":
+            return
+        if not message.content.strip():
+            return
+
+        history: list[dict[str, str]] = []
+        async for previous in message.channel.history(limit=12, before=message):
+            content = previous.content.strip()
+            if not content:
+                continue
+            role = "assistant" if previous.author.bot else "user"
+            history.append({"role": role, "content": content})
+        history.reverse()
+
+        async with message.channel.typing():
+            try:
+                answer, model, elapsed = await ask_support(
+                    message.content,
+                    history,
+                )
+            except SupportAIError as error:
+                await message.reply(error.message, mention_author=False)
+                return
+            except Exception:
+                await message.reply(
+                    "Сталася неочікувана помилка при зверненні до помічника.",
+                    mention_author=False,
+                )
+                return
+
+        embed = disnake.Embed(
+            description=answer,
+            colour=disnake.Colour.blurple(),
+        )
+        embed.set_footer(text=f"ШІ-асистент • {model} • {elapsed:.3f} c")
+        await message.reply(embed=embed, mention_author=True, view=AIResponseView())
+
+    async def start_ai_support(
+        self,
+        inter: disnake.MessageInteraction,
+    ) -> None:
+        channel = inter.channel
+        if not isinstance(channel, disnake.TextChannel):
+            await inter.response.send_message(
+                "Цю дію можна виконувати лише всередині тікету.",
+                ephemeral=True,
+            )
+            return
+
+        owner_id, _ = parse_ticket_topic(channel.topic)
+        if owner_id is None:
+            await inter.response.send_message(
+                "Не вдалося визначити тікет.",
+                ephemeral=True,
+            )
+            return
+        if inter.author.id != owner_id:
+            await inter.response.send_message(
+                "Спосіб підтримки може обрати лише автор тікету.",
+                ephemeral=True,
+            )
+            return
+
+        await channel.edit(topic=ticket_topic(owner_id, "ai"))
+
+        initial_request = ""
+        async for message in channel.history(limit=20):
+            if message.author.bot and message.embeds:
+                embed = message.embeds[0]
+                if embed.title and embed.title.startswith("Тікет:"):
+                    initial_request = (
+                        f"{embed.title}\n{embed.description or ''}"
+                    )
+                    break
+
+        await inter.response.defer(ephemeral=True)
+        async with channel.typing():
+            try:
+                answer, model, elapsed = await ask_support(
+                    (
+                        "Користувач створив тікет і обрав ШІ-асистента. "
+                        "Проаналізуй опис тікету та почни діалог:\n"
+                        f"{initial_request}"
+                    )
+                )
+            except SupportAIError as error:
+                await channel.send(
+                    embed=disnake.Embed(
+                        title="ШІ-асистент тимчасово недоступний",
+                        description=error.message,
+                        colour=disnake.Colour.red(),
+                    ),
+                    view=AIResponseView(),
+                )
+                await inter.edit_original_response(
+                    content="Спроба звернення до ШІ-асистента виконана."
+                )
+                return
+
+        embed = disnake.Embed(
+            title="ШІ-асистент",
+            description=answer,
+            colour=disnake.Colour.blurple(),
+        )
+        embed.set_footer(text=f"{model} • {elapsed:.3f} c")
+        await channel.send(
+            embed=embed,
+            view=AIResponseView(),
+        )
+        await inter.edit_original_response(
+            content="ШІ-асистент почав діалог."
+        )
+
+    async def wait_for_admin(
+        self,
+        inter: disnake.MessageInteraction,
+    ) -> None:
+        channel = inter.channel
+        if not isinstance(channel, disnake.TextChannel):
+            await inter.response.send_message(
+                "Цю дію можна виконувати лише всередині тікету.",
+                ephemeral=True,
+            )
+            return
+
+        owner_id, _ = parse_ticket_topic(channel.topic)
+        if owner_id is None:
+            await inter.response.send_message(
+                "Не вдалося визначити тікет.",
+                ephemeral=True,
+            )
+            return
+        if inter.author.id != owner_id:
+            await inter.response.send_message(
+                "Цей вибір може зробити лише автор тікету.",
+                ephemeral=True,
+            )
+            return
+
+        await channel.edit(topic=ticket_topic(owner_id, "human"))
+
+        role = inter.guild.get_role(HUMAN_ROLE_ID)
+        role_mention = role.mention if role else f"<@&{HUMAN_ROLE_ID}>"
+        embed = disnake.Embed(
+            title="Очікування адміністратора",
+            description=(
+                f"{role_mention}, у тікеті потрібна допомога людини. "
+                "ШІ-асистент більше не буде відповідати на повідомлення цього каналу."
+            ),
+            colour=disnake.Colour.orange(),
+        )
+        embed.set_footer(text="AtlasBot • Режим очікування")
+        await inter.response.send_message(
+            embed=embed,
+            view=CloseTicketView(),
+        )
+
     async def close_ticket(
         self,
         inter: disnake.MessageInteraction,
@@ -255,12 +495,7 @@ class Support(commands.Cog):
             )
             return
 
-        owner_id = None
-        if channel.topic and channel.topic.startswith("atlasbot-ticket:"):
-            try:
-                owner_id = int(channel.topic.removeprefix("atlasbot-ticket:"))
-            except ValueError:
-                owner_id = None
+        owner_id, _ = parse_ticket_topic(channel.topic)
 
         can_close = (
             inter.author.id == owner_id
@@ -318,6 +553,10 @@ class Support(commands.Cog):
             await inter.response.send_modal(modal=TicketModal(self.bot))
         elif inter.component.custom_id == OPEN_TICKET_CUSTOM_ID:
             await self.close_ticket(inter)
+        elif inter.component.custom_id == AI_ASSISTANT_CUSTOM_ID:
+            await self.start_ai_support(inter)
+        elif inter.component.custom_id == ADMIN_ASSISTANT_CUSTOM_ID:
+            await self.wait_for_admin(inter)
 
 
 def setup(bot: commands.InteractionBot) -> None:
