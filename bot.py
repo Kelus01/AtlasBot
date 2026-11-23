@@ -19,7 +19,10 @@ async def main() -> None:
 
     for cog_file in (ROOT_DIR / "cogs").glob("*.py"):
         if cog_file.name != "__init__.py":
-            await bot.load_extension(f"cogs.{cog_file.stem}")
+            try:
+                bot.load_extension(f"cogs.{cog_file.stem}")
+            except commands.errors.NoEntryPointError:
+                continue
 
     await bot.start(token)
 

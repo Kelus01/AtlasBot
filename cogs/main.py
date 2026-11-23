@@ -16,7 +16,7 @@ class General(commands.Cog):
         await inter.response.send_message(f"Hi, {inter.author.mention}!")
 
 
-async def setup(bot: commands.InteractionBot) -> None:
-    await bot.add_cog(General(bot))
+def setup(bot: commands.InteractionBot) -> None:
+    bot.add_cog(General(bot))
 
 
