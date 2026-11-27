@@ -1,3 +1,5 @@
+import logging
+
 import disnake
 from disnake.ext import commands
 
@@ -12,6 +14,8 @@ OPEN_TICKET_CUSTOM_ID = "atlasbot:close-ticket"
 AI_ASSISTANT_CUSTOM_ID = "atlasbot:choose-ai"
 ADMIN_ASSISTANT_CUSTOM_ID = "atlasbot:choose-admin"
 HUMAN_ROLE_ID = 1574481575054278717
+SERVER_INFO_COMMANDS = {"!serverinfo", "!server-info"}
+logger = logging.getLogger(__name__)
 
 
 def ticket_topic(owner_id: int, mode: str = "choice") -> str:
@@ -30,6 +34,21 @@ def parse_ticket_topic(topic: str | None) -> tuple[int | None, str]:
         return owner_id, mode
     except (IndexError, ValueError):
         return None, "none"
+
+
+def message_history_content(message: disnake.Message) -> str:
+    parts = [message.content.strip()] if message.content.strip() else []
+    for embed in message.embeds:
+        if embed.title:
+            parts.append(embed.title.strip())
+        if embed.description:
+            parts.append(embed.description.strip())
+        parts.extend(
+            f"{field.name}: {field.value}"
+            for field in embed.fields
+            if field.name.strip() or field.value.strip()
+        )
+    return "\n".join(part for part in parts if part)[:3000]
 
 
 class TicketModal(disnake.ui.Modal):
@@ -291,6 +310,46 @@ class Support(commands.Cog):
         embed.set_footer(text="Atlas • Техпідтримка Minecraft-сервера")
         return embed
 
+    def server_info_embed(self) -> disnake.Embed:
+        embed = disnake.Embed(
+            title="Інформація про сервер Testia",
+            colour=disnake.Colour.dark_green(),
+            description="Приєднуйся до гри та пригод на Testia!",
+        )
+        embed.add_field(name="Назва", value="Testia", inline=True)
+        embed.add_field(name="IP-адреса", value="`mc.testia.net`", inline=True)
+        embed.add_field(name="Версія Minecraft", value="`1.21.6`", inline=True)
+        embed.add_field(
+            name="Моди",
+            value=(
+                "Обов'язкових модів немає — можна грати без них. "
+                "За бажанням дозволені моди-помічники, наприклад Litematica. "
+                "Для інших модів дотримуйся правил сервера."
+            ),
+            inline=False,
+        )
+        return embed
+
+    async def send_server_info(self, message: disnake.Message) -> None:
+        if message.guild is None or not message.author.guild_permissions.manage_guild:
+            return
+        if not isinstance(message.channel, disnake.TextChannel):
+            return
+
+        await message.channel.send(embed=self.server_info_embed())
+        try:
+            await message.delete()
+        except disnake.Forbidden:
+            logger.exception(
+                "Не вдалося видалити виклик !serverinfo; "
+                "боту потрібен дозвіл Manage Messages у каналі %s",
+                message.channel.id,
+            )
+        except disnake.HTTPException:
+            logger.exception(
+                "Помилка Discord API під час видалення виклику !serverinfo"
+            )
+
     async def ensure_ticket_panel(self) -> None:
         if self._panel_checked:
             return
@@ -323,6 +382,10 @@ class Support(commands.Cog):
             return
         if not isinstance(message.channel, disnake.TextChannel):
             return
+        if message.content.strip().lower() in SERVER_INFO_COMMANDS:
+            await self.send_server_info(message)
+            return
+
         owner_id, mode = parse_ticket_topic(message.channel.topic)
         if owner_id is None:
             return
@@ -332,8 +395,8 @@ class Support(commands.Cog):
             return
 
         history: list[dict[str, str]] = []
-        async for previous in message.channel.history(limit=12, before=message):
-            content = previous.content.strip()
+        async for previous in message.channel.history(limit=20, before=message):
+            content = message_history_content(previous)
             if not content:
                 continue
             role = "assistant" if previous.author.bot else "user"
